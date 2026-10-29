@@ -1,0 +1,12 @@
+# 大きなデータは git に入れない（Google Drive などに置く。docs/data_collection_plan.md 参照）
+data/raw/
+data/frames/
+data/ocr/
+data/eval/
+data/labels/
+*.mp4
+*.mov
+*.pt
+*.onnx
+*.tflite
+*.h5
