@@ -1,0 +1,209 @@
+<title>ダメージ認識 速度テスト</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+  /* 単一カラムの計測ツール: 上に操作と要約、下に結果の表と検出画像 */
+  :root {
+    --bg: #f6f7f4; --surface: #ffffff; --fg: #1d2420; --muted: #5d6862; --line: #d9ded9;
+    --accent: #c25a12; --heal: #23884a; --bad: #b3261e;
+    --font-ui: system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif; --font-num: "JetBrains Mono", ui-monospace, monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg: #151916; --surface: #1d221f; --fg: #e6ebe7; --muted: #9aa49e; --line: #333b36;
+    --accent: #f08a3c; --heal: #5cc983; --bad: #f2867e; color-scheme: dark } }
+  :root[data-theme="dark"] {
+    --bg: #151916; --surface: #1d221f; --fg: #e6ebe7; --muted: #9aa49e; --line: #333b36;
+    --accent: #f08a3c; --heal: #5cc983; --bad: #f2867e; color-scheme: dark }
+  body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); line-height: 1.6;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 24px 48px }
+  main { max-width: 720px; margin: 0 auto; display: grid; gap: 20px }
+  h1 { font-size: 1.4rem; margin: 0; text-wrap: balance }
+  h2 { font-size: 1rem; margin: 0 0 8px }
+  p { margin: 0 }
+  .muted { color: var(--muted); font-size: 0.85rem }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 12px; min-width: 0 }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center }
+  button { font: inherit; font-weight: 600; padding: 10px 18px; border-radius: 8px; border: 1px solid var(--accent);
+    background: var(--accent); color: var(--surface); cursor: pointer }
+  button.secondary { background: transparent; color: var(--accent) }
+  button:disabled { opacity: 0.5; cursor: default }
+  button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px }
+  .fps { font-family: var(--font-num); font-size: 2.2rem; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; line-height: 1.1 }
+  .table-wrap { overflow-x: auto }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap }
+  td.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; text-align: right }
+  #log { font-family: var(--font-num); font-size: 0.8rem; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 }
+  .err { color: var(--bad) }
+  canvas { width: 100%; max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line) }
+  .shots { display: grid; gap: 12px }
+  .reads { font-family: var(--font-num); font-size: 0.85rem }
+  .dmg { color: var(--accent) } .heal { color: var(--heal) }
+</style>
+
+<main>
+  <header class="row" style="justify-content: space-between">
+    <div>
+      <h1>ダメージ認識 速度テスト</h1>
+      <p class="muted">このスマホのブラウザで、数字の検出と読み取りが1秒に何回できるかを測ります（CPU / WASM、約40MBを読み込みます）。</p>
+    </div>
+  </header>
+
+  <section class="panel">
+    <div class="row">
+      <button id="run" type="button">テスト開始</button>
+      <button id="copy" type="button" class="secondary" disabled>結果をコピー</button>
+    </div>
+    <div>
+      <p class="muted">推定処理速度（検出 640px + 読み取り）</p>
+      <p class="fps" id="fps">— 回/秒</p>
+    </div>
+    <pre id="log">開始ボタンを押してください。</pre>
+  </section>
+
+  <section class="panel">
+    <h2>モデルごとの所要時間</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>モデル</th><th>入力</th><th style="text-align:right">読込 ms</th><th style="text-align:right">中央値 ms</th><th style="text-align:right">回/秒</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5" class="muted">未計測</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>合成画像での認識結果</h2>
+    <p class="muted">合成データ（実際のゲーム画面ではありません）で、ブラウザ上でも正しく動くかを確認します。</p>
+    <div class="shots" id="shots"></div>
+  </section>
+</main>
+
+<script type="module">
+import * as ort from "./ort.wasm.bundle.min.mjs";
+
+const $ = (id) => document.getElementById(id);
+const log = (s, cls) => { const el = $("log"); el.textContent += "\n" + s; if (cls) el.classList.add(cls); };
+const MODELS = [
+  { key: "det640", file: "det_640.onnx", size: 640, label: "検出" },
+  { key: "det320", file: "det_320.onnx", size: 320, label: "検出（軽量入力）" },
+  { key: "ocr192", file: "ocr_192.onnx", size: 192, label: "読み取り" },
+];
+const SAMPLES = ["sample_0.jpg", "sample_1.jpg", "sample_2.jpg"];
+const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+let summary = "";
+
+function letterbox(src, sw, sh, size) {
+  const c = new OffscreenCanvas(size, size), g = c.getContext("2d", { willReadFrequently: true });
+  const r = Math.min(size / sw, size / sh), w = Math.round(sw * r), h = Math.round(sh * r);
+  const px = (size - w) / 2, py = (size - h) / 2;
+  g.fillStyle = "rgb(114,114,114)"; g.fillRect(0, 0, size, size);
+  g.drawImage(src, 0, 0, sw, sh, px, py, w, h);
+  const d = g.getImageData(0, 0, size, size).data, n = size * size, t = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++) { t[i] = d[4 * i] / 255; t[n + i] = d[4 * i + 1] / 255; t[2 * n + i] = d[4 * i + 2] / 255; }
+  return { tensor: new ort.Tensor("float32", t, [1, 3, size, size]), r, px, py };
+}
+
+// YOLO 出力 [1, 4+nc, N] → 元画像座標の枠
+function decode(out, lb, conf = 0.25, iouTh = 0.5) {
+  const [, ch, n] = out.dims, d = out.data, nc = ch - 4, boxes = [];
+  for (let i = 0; i < n; i++) {
+    let best = 0, cls = -1;
+    for (let c = 0; c < nc; c++) { const s = d[(4 + c) * n + i]; if (s > best) { best = s; cls = c; } }
+    if (best < conf) continue;
+    const cx = d[i], cy = d[n + i], w = d[2 * n + i], h = d[3 * n + i];
+    boxes.push({ cls, score: best, x0: (cx - w / 2 - lb.px) / lb.r, y0: (cy - h / 2 - lb.py) / lb.r,
+                 x1: (cx + w / 2 - lb.px) / lb.r, y1: (cy + h / 2 - lb.py) / lb.r });
+  }
+  boxes.sort((a, b) => b.score - a.score);
+  const keep = [];
+  for (const b of boxes) if (keep.every((k) => iou(k, b) < iouTh)) keep.push(b);
+  return keep;
+}
+function iou(a, b) {
+  const ix = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)), iy = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const inter = ix * iy; return inter / ((a.x1 - a.x0) * (a.y1 - a.y0) + (b.x1 - b.x0) * (b.y1 - b.y0) - inter + 1e-9);
+}
+
+async function readNumber(sess, img, b) {
+  const px = 0.1 * (b.x1 - b.x0), py = 0.1 * (b.y1 - b.y0);
+  const x0 = Math.max(0, b.x0 - px), y0 = Math.max(0, b.y0 - py);
+  const x1 = Math.min(img.width, b.x1 + px), y1 = Math.min(img.height, b.y1 + py);
+  const crop = new OffscreenCanvas(Math.max(1, Math.round(x1 - x0)), Math.max(1, Math.round(y1 - y0)));
+  crop.getContext("2d").drawImage(img, x0, y0, x1 - x0, y1 - y0, 0, 0, crop.width, crop.height);
+  const lb = letterbox(crop, crop.width, crop.height, 192);
+  const out = (await sess.run({ [sess.inputNames[0]]: lb.tensor }))[sess.outputNames[0]];
+  return decode(out, lb).sort((a, b2) => a.x0 - b2.x0).map((d) => d.cls).join("");
+}
+
+async function timeRuns(sess, size, n) {
+  const x = new ort.Tensor("float32", new Float32Array(3 * size * size).fill(0.5), [1, 3, size, size]);
+  const feeds = { [sess.inputNames[0]]: x }, ts = [];
+  for (let i = 0; i < 3; i++) await sess.run(feeds);
+  for (let i = 0; i < n; i++) { const t = performance.now(); await sess.run(feeds); ts.push(performance.now() - t); }
+  return median(ts);
+}
+
+async function run() {
+  $("run").disabled = true; $("copy").disabled = true; $("log").textContent = ""; $("log").classList.remove("err");
+  $("rows").innerHTML = ""; $("shots").innerHTML = "";
+  try {
+    ort.env.wasm.wasmPaths = { wasm: new URL("./ort-wasm-simd-threaded.wasm", location.href).href };
+    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+    const info = `UA: ${navigator.userAgent}\nCPU コア: ${navigator.hardwareConcurrency} / スレッド: ${ort.env.wasm.numThreads} / WebGPU: ${"gpu" in navigator ? "あり（未使用）" : "なし"}`;
+    log(info);
+    const sessions = {}, res = {};
+    for (const m of MODELS) {
+      log(`${m.file} を読み込み中…`);
+      const t = performance.now();
+      sessions[m.key] = await ort.InferenceSession.create(m.file, { executionProviders: ["wasm"] });
+      const load = performance.now() - t;
+      const ms = await timeRuns(sessions[m.key], m.size, 15);
+      res[m.key] = ms;
+      $("rows").insertAdjacentHTML("beforeend",
+        `<tr><td>${m.label}</td><td>${m.size}px</td><td class="num">${load.toFixed(0)}</td><td class="num">${ms.toFixed(1)}</td><td class="num">${(1000 / ms).toFixed(1)}</td></tr>`);
+    }
+    // 1フレームに数字が平均2個ある想定
+    const pipe = res.det640 + 2 * res.ocr192, pipeLite = res.det320 + 2 * res.ocr192;
+    $("fps").textContent = `${(1000 / pipe).toFixed(1)} 回/秒`;
+    log(`推定: 検出640 + 読み取り×2 = ${pipe.toFixed(0)} ms（${(1000 / pipe).toFixed(1)} 回/秒）、検出320 なら ${pipeLite.toFixed(0)} ms（${(1000 / pipeLite).toFixed(1)} 回/秒）`);
+
+    const reads = [];
+    for (const f of SAMPLES) {
+      const img = await createImageBitmap(await (await fetch(f)).blob());
+      const t = performance.now();
+      const lb = letterbox(img, img.width, img.height, 640);
+      const out = (await sessions.det640.run({ [sessions.det640.inputNames[0]]: lb.tensor }))[sessions.det640.outputNames[0]];
+      const found = decode(out, lb);
+      for (const b of found) b.value = await readNumber(sessions.ocr192, img, b);
+      const ms = performance.now() - t;
+      const cv = document.createElement("canvas"); cv.width = img.width; cv.height = img.height;
+      const g = cv.getContext("2d"); g.drawImage(img, 0, 0); g.lineWidth = 3; g.font = "bold 28px sans-serif";
+      for (const b of found) {
+        g.strokeStyle = g.fillStyle = b.cls === 0 ? "#ff8a1e" : "#3ee07a";
+        g.strokeRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0); g.fillText(b.value, b.x0, b.y0 - 6);
+      }
+      const text = found.map((b) => `<span class="${b.cls === 0 ? "dmg" : "heal"}">${b.cls === 0 ? "ダメージ" : "回復"} ${b.value}</span>`).join("　") || "検出なし";
+      const div = document.createElement("div"); div.append(cv);
+      div.insertAdjacentHTML("beforeend", `<p class="reads">${f}: ${text}（${ms.toFixed(0)} ms）</p>`);
+      $("shots").append(div);
+      reads.push(`${f}: ${found.map((b) => `${b.cls === 0 ? "dmg" : "heal"}=${b.value}`).join(", ") || "none"} (${ms.toFixed(0)}ms)`);
+    }
+    summary = [info, ...MODELS.map((m) => `${m.file}: ${res[m.key].toFixed(1)} ms`),
+      `pipeline640: ${pipe.toFixed(0)} ms, pipeline320: ${pipeLite.toFixed(0)} ms`, ...reads].join("\n");
+    log("完了");
+    $("copy").disabled = false;
+  } catch (e) {
+    log(`エラー: ${e && e.message ? e.message : e}`, "err");
+    summary = $("log").textContent; $("copy").disabled = false;
+  } finally {
+    $("run").disabled = false;
+  }
+}
+
+$("run").addEventListener("click", run);
+$("copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(summary); $("copy").textContent = "コピーしました"; }
+  catch { const r = document.createRange(); r.selectNodeContents($("log")); getSelection().removeAllRanges(); getSelection().addRange(r); }
+});
+</script>
