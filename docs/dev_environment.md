@@ -29,19 +29,22 @@ uv tool install google-colab-cli
   - `colab download` … 実行環境からファイルを取り出す
   - `colab stop` … 実行環境を止める
   - `colab run` … 作成 → 実行 → 結果回収 → 停止を1回で行う
-- ログイン: 既定の `oauth2` 方式では、表示された URL をブラウザで開いてログインし、表示されたコードを端末に貼り付ける。ブラウザのない環境でも使える。トークンは `~/.config/colab-cli/token.json` に保存される。
-- GPU 利用は Colab の利用枠（無料枠・コンピューティングユニット）を消費する。無料プランで CLI がどこまで使えるかは未確認。
+- 認証は2通り:
+  - `oauth2`（既定）: 表示された URL をブラウザで開いてログインし、表示されたコードを端末に貼り付ける。トークンは `~/.config/colab-cli/token.json` に保存される。
+  - `adc`: Application Default Credentials の JSON を使う。ファイルの場所を `GOOGLE_APPLICATION_CREDENTIALS` で指定し、`colab --auth adc ...` で実行する。
+- GPU 利用は Colab のコンピューティングユニットを消費する。残高は `colab usage` で確認できる。
 
-### Claude Code のクラウドセッションから使う場合（2026-10-29 確認）
+### クラウド・自動化環境での認証（2026-10-30 確認済み）
 
-- インストールと、Colab・Google ログインの各サーバーへの接続は確認済み。
-- ログインはオーナー本人の操作が必要（Q6）。
+オーナーの ADC JSON を base64 にしたものを環境変数 `COLAB_ADC_B64` に設定してある。中身は絶対にコミットしない。
 
-## Claude Code のクラウドセッションのネットワーク設定
+```bash
+umask 077; mkdir -p ~/.config/colab-cli
+echo "$COLAB_ADC_B64" | base64 -d > ~/.config/colab-cli/adc.json
+export GOOGLE_APPLICATION_CREDENTIALS=~/.config/colab-cli/adc.json
+colab --auth adc usage
+```
 
-Gemini の共有リンクを読むには、環境のネットワーク設定で次のドメインの許可が必要だった。
+## 外部リンクの取得に必要なネットワーク許可
 
-- `share.gemini.google`（共有リンク）
-- `gemini.google.com`（転送先）
-
-共有ページ自体は JavaScript で描画され、その JavaScript は `gstatic.com` から配信される（未許可）。そのため、ページは描画せずに `gemini.google.com` の会話データ取得用の内部エンドポイントから直接取得した。
+ネットワークが制限された環境で Gemini の共有リンクを読むには `share.gemini.google` と `gemini.google.com` の許可が必要。共有ページは `gstatic.com` から配信される JavaScript で描画されるため、それを許可しない場合はページを描画できない。
