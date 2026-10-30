@@ -10,7 +10,8 @@ mkdir -p "$out"
 tmp="$(mktemp -d)"
 (cd "$tmp" && npm pack -s "onnxruntime-web@$ORT_VERSION" >/dev/null && tar xzf "onnxruntime-web-$ORT_VERSION.tgz")
 cp "$tmp/package/dist/ort.wasm.bundle.min.mjs" "$tmp/package/dist/ort-wasm-simd-threaded.wasm" "$out/"
-cp "$models"/det_640.onnx "$models"/det_320.onnx "$models"/ocr_192.onnx "$out/"
+# 公開先が .onnx を配信できないため base64 テキストにする
+for m in det_640 det_320 ocr_192; do base64 -w0 "$models/$m.onnx" > "$out/$m.onnx.b64.txt"; done
 cp "$here/index.html" "$out/"
 # サンプル画像: 学習に使わない test 分割の先頭3枚と同じ生成条件
 python3 "$here/../gen_synth.py" --out "$tmp/synth" --splits train:0,val:0,test:3

@@ -89,6 +89,13 @@ const MODELS = [
   { key: "det320", file: "det_320.onnx", size: 320, label: "検出（軽量入力）" },
   { key: "ocr192", file: "ocr_192.onnx", size: 192, label: "読み取り" },
 ];
+// 公開先が .onnx を配信できないため、モデルは base64 テキスト（<名前>.b64.txt）で置いている
+async function loadModel(file) {
+  const s = (await (await fetch(file + ".b64.txt")).text()).trim();
+  const bin = atob(s), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
 const SAMPLES = ["sample_0.jpg", "sample_1.jpg", "sample_2.jpg"];
 const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
 let summary = "";
@@ -156,7 +163,7 @@ async function run() {
     for (const m of MODELS) {
       log(`${m.file} を読み込み中…`);
       const t = performance.now();
-      sessions[m.key] = await ort.InferenceSession.create(m.file, { executionProviders: ["wasm"] });
+      sessions[m.key] = await ort.InferenceSession.create(await loadModel(m.file), { executionProviders: ["wasm"] });
       const load = performance.now() - t;
       const ms = await timeRuns(sessions[m.key], m.size, 15);
       res[m.key] = ms;

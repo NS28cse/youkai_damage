@@ -48,3 +48,14 @@ colab --auth adc usage
 ## 外部リンクの取得に必要なネットワーク許可
 
 ネットワークが制限された環境で Gemini の共有リンクを読むには `share.gemini.google` と `gemini.google.com` の許可が必要。共有ページは `gstatic.com` から配信される JavaScript で描画されるため、それを許可しない場合はページを描画できない。
+
+## Colab CLI の実績（2026-10-30）
+
+- 合成データの検証（[experiments/feasibility](../experiments/feasibility/README.md)）を T4 で実行。`colab new` → `colab upload` → `colab exec`（長い処理は VM 上でバックグラウンド起動し、ログを見て完了を待つ）→ `colab download` → `colab stop`。
+- `colab exec` の既定タイムアウトは 30 秒なので、`--timeout` を指定する。
+- 終わったら必ず `colab stop` する（止めないとユニットを消費し続ける）。
+
+## Artifact（claude.ai）でページを公開する場合の制約
+
+- `.onnx` は配信できない（base64 にして `.txt` で置き、ページ側で復元する）。1ファイル 15MB まで。
+- COOP/COEP ヘッダーを付けられないため、onnxruntime-web は1スレッドになる。WebGPU 版のランタイム（約 27MB）はファイルサイズ上限を超える。
